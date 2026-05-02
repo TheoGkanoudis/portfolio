@@ -7,17 +7,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>portfolio</title>
   <link rel="stylesheet" href="/src/style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css" />
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
   <script type="module" src="/src/main.ts"></script>
 </head>
 
 <body>
   <h1>Theo</h1>
-  <p id="temperature">?</p>
-  <p id="precipitation">?</p>
-  <p id="rain">?</p>
-  <p id="snowfall">?</p>
-  <p id="visibility">?</p>
+  <div id="map"></div>
+  <div id="weather">
+    <p id="temperature">?</p>
+    <p id="precipitation">?</p>
+    <p id="rain">?</p>
+    <p id="snowfall">?</p>
+    <p id="visibility">?</p>
+  </div>
 </body>
 
 </html>
