@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tgk\\\\OneDrive - Abakion\\\\Apps\\\\Skrivebord\\\\Theo\\\\personal\\\\projects\\\\portfolio\" -Force)"
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tgk\\\\OneDrive - Abakion\\\\Apps\\\\Skrivebord\\\\Theo\\\\personal\\\\projects\\\\portfolio\" -Force)",
+      "Bash(npm install *)"
     ]
   }
 }
