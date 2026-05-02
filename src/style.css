@@ -8,17 +8,21 @@ body {
   overflow: hidden;
 }
 
-#map {
+/* Fullscreen map layers (non-interactive overlays) */
+#map,
+#map-night,
+#parallax-clouds {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
+  pointer-events: none;
+}
 
-  &>* {
-    width: 100%;
-    height: 100%;
-  }
-
+/* Shared MapLibre canvas sizing */
+#map,
+#map-night,
+#map-clouds {
   & canvas {
     width: 100% !important;
     height: 100% !important;
@@ -28,6 +32,25 @@ body {
   & .maplibregl-control-container {
     display: none;
   }
+}
+
+/* Parallax wrapper. Apply transforms (translate / scale) here for parallax effects. */
+#parallax-clouds {
+  will-change: transform;
+}
+
+#map-clouds {
+  position: absolute;
+  inset: -10%;
+  width: 120%;
+  height: 120%;
+}
+
+#night-overlay {
+  position: fixed;
+  inset: 0;
+  background: black;
+  pointer-events: none;
 }
 
 #weather {
