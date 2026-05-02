@@ -78,7 +78,7 @@ function getMap(lat: number, lng: number): void {
                 clouds: {
                     type: "raster",
                     tiles: [
-                        `https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`,
+                        `https://tile.openweathermap.org/map/clouds/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`,
                     ],
                     tileSize: 256,
                     attribution: "© OpenWeatherMap",
