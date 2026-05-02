@@ -8,21 +8,35 @@ body {
   overflow: hidden;
 }
 
-/* Fullscreen map layers (non-interactive overlays) */
-#map,
-#map-night,
-#parallax-clouds {
+#map-container {
   position: fixed;
   inset: 0;
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
+}
+
+/* All map layers fill the container */
+#map,
+#map-night,
+#night-overlay,
+#parallax-clouds-low,
+#parallax-clouds-high {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
+}
+
+#map {
+  pointer-events: auto;
 }
 
 /* Shared MapLibre canvas sizing */
 #map,
 #map-night,
-#map-clouds {
+#map-clouds-low,
+#map-clouds-high {
   & canvas {
     width: 100% !important;
     height: 100% !important;
@@ -34,23 +48,29 @@ body {
   }
 }
 
-/* Parallax wrapper. Apply transforms (translate / scale) here for parallax effects. */
-#parallax-clouds {
-  will-change: transform;
+#night-overlay {
+  background: black;
 }
 
-#map-clouds {
+/* Parallax wrappers. Apply transforms here for parallax effects. */
+#parallax-clouds-low,
+#parallax-clouds-high {
+  will-change: transform;
+  width: 100%;
+  height: 100%;
+}
+
+#map-clouds-low,
+#map-clouds-high {
   position: absolute;
   inset: -10%;
   width: 120%;
   height: 120%;
 }
 
-#night-overlay {
-  position: fixed;
-  inset: 0;
-  background: black;
-  pointer-events: none;
+/* High clouds drawn lighter to suggest altitude depth */
+#map-clouds-high {
+  opacity: 0.6;
 }
 
 #weather {
