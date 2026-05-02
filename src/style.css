@@ -5,13 +5,31 @@
 body {
   margin: 0;
   text-align: center;
+  overflow: hidden;
 }
 
 #map {
-  width: 100%;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
   height: 100vh;
+
+  &>* {
+    width: 100%;
+    height: 100%;
+  }
+
+  & canvas {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+
+  & .maplibregl-control-container {
+    display: none;
+  }
 }
 
 #weather {
-  padding: 1rem;
+  display: none;
 }
