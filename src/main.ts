@@ -109,7 +109,7 @@ function getMap(lat: number, lng: number): void {
         },
         center: [lng, lat],
         zoom: MAP_ZOOM,
-        interactive: false,
+        interactive: true,
     });
 
     // Re-evaluate night overlay every minute
