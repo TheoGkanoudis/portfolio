@@ -11,9 +11,8 @@ const OWM_API_KEY = (import.meta as any).env.VITE_OWM_API_KEY as string;
 
 // Set to [lat, lng] to override geolocation (e.g. to test night side). null = use real location.
 const DEBUG_LOCATION: [number, number] | null = null;
-
 // Override the current time for testing day/night. Use an ISO string e.g. "2024-01-01T00:00:00Z" for night, "2024-07-01T12:00:00Z" for day. null = use real time.
-const DEBUG_TIME: string | null = "2024-06-01T02:20:00Z";
+const DEBUG_TIME: string | null = null;
 
 // Toggle which layers are fetched and rendered. Disable to isolate individual layers.
 const DEBUG_LAYERS = {
@@ -24,7 +23,32 @@ const DEBUG_LAYERS = {
 
 $(function () {
     locationInit();
+    initParallaxDragTest(); // TEMP: remove when real parallax is wired up
 });
+
+// TEMP PARALLAX TEST — remove this function and its call above when no longer needed.
+function initParallaxDragTest(): void {
+    const el = document.getElementById("parallax-clouds");
+    if (!el) return;
+    const MAX = 12; // px — subtle drift relative to mouse position
+    let targetX = 0, targetY = 0;
+    let currentX = 0, currentY = 0;
+
+    window.addEventListener("mousemove", (e) => {
+        const nx = (e.clientX / window.innerWidth) * 2 - 1;  // -1..1
+        const ny = (e.clientY / window.innerHeight) * 2 - 1;
+        targetX = -nx * MAX;
+        targetY = -ny * MAX;
+    });
+
+    const tick = () => {
+        currentX += (targetX - currentX) * 0.08;
+        currentY += (targetY - currentY) * 0.08;
+        el.style.transform = `translate(${currentX.toFixed(2)}px, ${currentY.toFixed(2)}px)`;
+        requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+}
 
 function locationInit(): void {
     if (DEBUG_LOCATION) {
@@ -105,75 +129,164 @@ async function getWeatherData(lat: number, long: number): Promise<void> {
     $("#visibility").text(`Visibility: ${(weatherData.visibility / 1000).toFixed(1)} km`);
 }
 
-// Night-earth opacity: 0 during day, 1 at night, smooth transition through civil twilight (0 to -6 deg)
+// Night-earth (city lights) opacity: starts at -3°, full by -6° (3° window).
 function altitudeToNightEarthOpacity(altRad: number): number {
-    const MAX = 0.75; // keep satellite visible underneath
+    const MAX = 0.65;
+    const START_DEG = -3;
+    const END_DEG = -6;
     const alt = altRad * (180 / Math.PI);
-    if (alt >= 0) return 0;
-    if (alt <= -6) return MAX;
-    const t = -alt / 6;
+    if (alt >= START_DEG) return 0;
+    if (alt <= END_DEG) return MAX;
+    const t = (START_DEG - alt) / (START_DEG - END_DEG);
+    return MAX * t * t * (3 - 2 * t);
+}
+
+// Dark overlay opacity: starts at sunset (0°), fully dark by -4° (4° window).
+function altitudeToDarkOverlayOpacity(altRad: number): number {
+    const MAX = 0.82;
+    const START_DEG = 0;
+    const END_DEG = -4;
+    const alt = altRad * (180 / Math.PI);
+    if (alt >= START_DEG) return 0;
+    if (alt <= END_DEG) return MAX;
+    const t = (START_DEG - alt) / (START_DEG - END_DEG);
     return MAX * t * t * (3 - 2 * t);
 }
 
 function getMap(lat: number, lng: number): void {
-    const sources: maplibregl.StyleSpecification["sources"] = {};
-    if (DEBUG_LAYERS.satellite) {
-        sources["satellite"] = {
-            type: "raster",
-            tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-            tileSize: 256,
-            attribution: "© Esri",
-        };
-    }
-    if (DEBUG_LAYERS.nightEarth) {
-        sources["night-earth"] = {
-            type: "raster",
-            tiles: [
-                "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
-            ],
-            tileSize: 256,
-            maxzoom: 8,
-            attribution: "© NASA GIBS Black Marble",
-        };
-    }
-    if (DEBUG_LAYERS.clouds) {
-        sources["clouds"] = {
-            type: "raster",
-            tiles: [`https://tile.openweathermap.org/map/clouds/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
-            tileSize: 512,
-            attribution: "© OpenWeatherMap",
-        };
-    }
-
-    const layers: maplibregl.LayerSpecification[] = [];
-    if (DEBUG_LAYERS.satellite) layers.push({ id: "satellite-layer", type: "raster", source: "satellite" });
-    if (DEBUG_LAYERS.nightEarth) layers.push({
-        id: "night-earth-layer",
-        type: "raster",
-        source: "night-earth",
-        paint: { "raster-opacity": 0, "raster-resampling": "linear" },
-    });
-    if (DEBUG_LAYERS.clouds) layers.push({ id: "clouds-layer", type: "raster", source: "clouds", paint: { "raster-opacity": 0.8 } });
-
-    const map = new maplibregl.Map({
+    // --- Satellite map (bottom layer) ---
+    const satelliteMap = new maplibregl.Map({
         container: "map",
-        style: { version: 8, sources, layers },
+        style: {
+            version: 8,
+            sources: DEBUG_LAYERS.satellite ? {
+                "satellite": {
+                    type: "raster",
+                    tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+                    tileSize: 256,
+                    attribution: "© Esri",
+                },
+            } : {},
+            layers: DEBUG_LAYERS.satellite
+                ? [{ id: "satellite-layer", type: "raster", source: "satellite" }]
+                : [],
+        },
         center: [lng, lat],
         zoom: MAP_ZOOM,
         interactive: false,
         trackResize: false,
     });
 
-    map.once("idle", () => {
-        const now = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
-        if (DEBUG_LAYERS.nightEarth) {
-            updateNightEarth(map, lat, lng, now);
-            setInterval(() => updateNightEarth(map, lat, lng, DEBUG_TIME ? new Date(DEBUG_TIME) : new Date()), 60_000);
-        }
-    });
+    // --- Night-earth map (city lights) ---
+    if (DEBUG_LAYERS.nightEarth) {
+        const nightMapStyle: maplibregl.StyleSpecification = {
+            version: 8,
+            sources: {
+                "night-earth": {
+                    type: "raster",
+                    tiles: [
+                        "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+                    ],
+                    tileSize: 256,
+                    maxzoom: 8,
+                    attribution: "© NASA GIBS Black Marble",
+                },
+            },
+            layers: [{ id: "night-earth-layer", type: "raster", source: "night-earth" }],
+        };
 
-    function updateNightEarth(map: maplibregl.Map, lat: number, lng: number, date: Date): void {
-        const { altitude } = SunCalc.getPosition(date, lat, lng);
-        map.setPaintProperty("night-earth-layer", "raster-opacity", altitudeToNightEarthOpacity(altitude));
+        const nightMap = new maplibregl.Map({
+            container: "map-night",
+            style: nightMapStyle,
+            center: [lng, lat],
+            zoom: MAP_ZOOM,
+            interactive: false,
+            trackResize: false,
+        });
+
+        nightMap.once("idle", () => {
+            const now = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
+            updateTerminatorMask(satelliteMap, now);
+            setInterval(() => updateTerminatorMask(satelliteMap, DEBUG_TIME ? new Date(DEBUG_TIME) : new Date()), 60_000);
+        });
     }
+
+    // --- Clouds map ---
+    if (DEBUG_LAYERS.clouds) {
+        const cloudsMap = new maplibregl.Map({
+            container: "map-clouds",
+            style: {
+                version: 8,
+                sources: {
+                    "clouds": {
+                        type: "raster",
+                        tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
+                        tileSize: 256,
+                        attribution: "© OpenWeatherMap",
+                    },
+                },
+                layers: [{
+                    id: "clouds-layer",
+                    type: "raster",
+                    source: "clouds",
+                    paint: {
+                        "raster-opacity": 1.0,
+                        "raster-fade-duration": 0,
+                        "raster-resampling": "linear",
+                    },
+                }],
+            },
+            center: [lng, lat],
+            zoom: MAP_ZOOM,
+            interactive: false,
+        });
+        // Container is larger than the viewport (for parallax headroom) — sync canvas size.
+        cloudsMap.once("load", () => cloudsMap.resize());
+        window.addEventListener("resize", () => cloudsMap.resize());
+    }
+}
+
+function applyMask(el: HTMLElement, dataUrl: string): void {
+    el.style.maskImage = `url(${dataUrl})`;
+    (el.style as any).webkitMaskImage = `url(${dataUrl})`;
+    el.style.maskSize = "100% 100%";
+    (el.style as any).webkitMaskSize = "100% 100%";
+    el.style.maskRepeat = "no-repeat";
+    (el.style as any).webkitMaskRepeat = "no-repeat";
+}
+
+function updateTerminatorMask(map: maplibregl.Map, date: Date): void {
+    const container = map.getContainer();
+    const W = container.clientWidth;
+    const H = container.clientHeight;
+
+    const SCALE = 4;
+    const sw = Math.ceil(W / SCALE);
+    const sh = Math.ceil(H / SCALE);
+
+    const mkCanvas = () => { const c = document.createElement("canvas"); c.width = sw; c.height = sh; return c; };
+    const nightCanvas = mkCanvas(), darkCanvas = mkCanvas();
+    const nightCtx = nightCanvas.getContext("2d")!, darkCtx = darkCanvas.getContext("2d")!;
+    const nightData = nightCtx.createImageData(sw, sh);
+    const darkData = darkCtx.createImageData(sw, sh);
+
+    for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+            const lngLat = map.unproject([(x + 0.5) * SCALE, (y + 0.5) * SCALE] as [number, number]);
+            const { altitude } = SunCalc.getPosition(date, lngLat.lat, lngLat.lng);
+            const i = (y * sw + x) * 4;
+
+            nightData.data[i] = nightData.data[i+1] = nightData.data[i+2] = 255;
+            nightData.data[i+3] = Math.round(altitudeToNightEarthOpacity(altitude) * 255);
+
+            darkData.data[i] = darkData.data[i+1] = darkData.data[i+2] = 255;
+            darkData.data[i+3] = Math.round(altitudeToDarkOverlayOpacity(altitude) * 255);
+        }
+    }
+
+    nightCtx.putImageData(nightData, 0, 0);
+    applyMask(document.getElementById("map-night")!, nightCanvas.toDataURL("image/png"));
+
+    darkCtx.putImageData(darkData, 0, 0);
+    applyMask(document.getElementById("night-overlay")!, darkCanvas.toDataURL("image/png"));
 }
