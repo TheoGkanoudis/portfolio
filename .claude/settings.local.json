@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tgk\\\\OneDrive - Abakion\\\\Apps\\\\Skrivebord\\\\Theo\\\\personal\\\\projects\\\\portfolio\" -Force)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/maplibre-gl/package.json'\\).version\\)\")"
     ]
   }
 }
