@@ -6,7 +6,7 @@ import * as SunCalc from "suncalc";
 declare const $: typeof jQuery;
 
 // Configuration
-const MAP_ZOOM = 6;
+const MAP_ZOOM = 7;
 const OWM_API_KEY = (import.meta as any).env.VITE_OWM_API_KEY as string;
 
 // Set to [lat, lng] to override geolocation (e.g. to test night side). null = use real location.
@@ -212,37 +212,45 @@ function getMap(lat: number, lng: number): void {
     }
 
     // --- Clouds map ---
+    // --- Cloud maps (stacked at same zoom, different opacities for altitude depth) ---
     if (DEBUG_LAYERS.clouds) {
-        const cloudsMap = new maplibregl.Map({
-            container: "map-clouds",
-            style: {
-                version: 8,
-                sources: {
-                    "clouds": {
-                        type: "raster",
-                        tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
-                        tileSize: 256,
-                        attribution: "© OpenWeatherMap",
-                    },
-                },
-                layers: [{
-                    id: "clouds-layer",
+        const cloudStyle = (): maplibregl.StyleSpecification => ({
+            version: 8,
+            sources: {
+                "clouds": {
                     type: "raster",
-                    source: "clouds",
-                    paint: {
-                        "raster-opacity": 1.0,
-                        "raster-fade-duration": 0,
-                        "raster-resampling": "linear",
-                    },
-                }],
+                    tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
+                    tileSize: 256,
+                    attribution: "© OpenWeatherMap",
+                },
             },
-            center: [lng, lat],
-            zoom: MAP_ZOOM,
-            interactive: false,
+            layers: [{
+                id: "clouds-layer",
+                type: "raster",
+                source: "clouds",
+                paint: {
+                    "raster-opacity": 1.0,
+                    "raster-fade-duration": 0,
+                    "raster-resampling": "linear",
+                },
+            }],
         });
-        // Container is larger than the viewport (for parallax headroom) — sync canvas size.
-        cloudsMap.once("load", () => cloudsMap.resize());
-        window.addEventListener("resize", () => cloudsMap.resize());
+
+        const mkCloudsMap = (containerId: string) => {
+            const m = new maplibregl.Map({
+                container: containerId,
+                style: cloudStyle(),
+                center: [lng, lat],
+                zoom: MAP_ZOOM,
+                interactive: false,
+            });
+            m.once("load", () => m.resize());
+            window.addEventListener("resize", () => m.resize());
+        };
+
+        // Low (base) layer — full opacity. High layer — lighter, moves faster for depth illusion.
+        mkCloudsMap("map-clouds-low");
+        mkCloudsMap("map-clouds-high");
     }
 }
 
