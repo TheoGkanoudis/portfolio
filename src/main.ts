@@ -257,7 +257,7 @@ function getMap(lat: number, lng: number): void {
             sources: DEBUG_LAYERS.satellite ? {
                 "satellite": {
                     type: "raster",
-                    tiles: ["https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg"],
+                    tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
                     tileSize: 256,
                     maxzoom: 14,
                     attribution: "Sentinel-2 cloudless by EOX",
