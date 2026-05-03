@@ -37,10 +37,6 @@ body {
   pointer-events: none;
 }
 
-#map {
-  pointer-events: auto;
-}
-
 /* Shared MapLibre canvas sizing */
 #map,
 #map-lights,
