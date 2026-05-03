@@ -11,6 +11,7 @@ body {
 }
 
 #map-container {
+  pointer-events: none;
   position: fixed;
   opacity: 0;
   inset: 0;
