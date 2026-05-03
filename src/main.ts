@@ -5,7 +5,7 @@ import * as SunCalc from "suncalc";
 
 declare const $: typeof jQuery;
 
-const MAP_ZOOM = 8;
+const MAP_ZOOM = 7;
 const OWM_API_KEY = (import.meta as any).env.VITE_OWM_API_KEY as string;
 
 const DEBUG_LOCATION: [number, number] | null = null;
