@@ -70,12 +70,33 @@ function installCloudAlphaBoostFilter(): void {
         const filter = document.createElementNS(svgNS, "filter");
         filter.setAttribute("id", FILTER_ID);
         filter.setAttribute("color-interpolation-filters", "sRGB");
+        // Pad the filter region generously so a wide blur isn't clipped at
+        // the element edges (otherwise the blur falls off near the borders
+        // and seams near the edge of the viewport remain visible).
+        filter.setAttribute("x", "-25%");
+        filter.setAttribute("y", "-25%");
+        filter.setAttribute("width", "150%");
+        filter.setAttribute("height", "150%");
+
+        // OWM `clouds_new` tiles have visible seams because adjacent tiles
+        // hold slightly different per-tile cloud-cover values, producing
+        // sharp alpha discontinuities at tile boundaries. A wide Gaussian
+        // blur smears those step edges into a smooth gradient before we
+        // shape the alpha with the transfer curve. stdDeviation needs to be
+        // large enough to bridge the worst-case alpha jump between two
+        // neighbouring tiles (~150px on screen at the current zoom).
+        const blur = document.createElementNS(svgNS, "feGaussianBlur");
+        blur.setAttribute("stdDeviation", "16");
+        blur.setAttribute("edgeMode", "duplicate");
+        filter.appendChild(blur);
+
         const transfer = document.createElementNS(svgNS, "feComponentTransfer");
         const funcA = document.createElementNS(svgNS, "feFuncA");
         funcA.setAttribute("type", "table");
-        funcA.setAttribute("tableValues", "0 0.2 0.6 0.6 0.7 0.85 1");
+        funcA.setAttribute("tableValues", "0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.7 0.7 0.7 0.7");
         transfer.appendChild(funcA);
         filter.appendChild(transfer);
+
         svg.appendChild(filter);
         document.body.appendChild(svg);
     }
@@ -202,7 +223,7 @@ function altitudeToCityLightsOpacity(altRad: number): number {
 }
 
 function altitudeToDarkOverlayOpacity(altRad: number): number {
-    const MAX = 0.78;
+    const MAX = 0.7;
     const START_DEG = 0;
     const END_DEG = -2;
     const alt = altRad * (180 / Math.PI);
@@ -213,8 +234,8 @@ function altitudeToDarkOverlayOpacity(altRad: number): number {
 }
 
 function altitudeToSunsetOverlayOpacity(altRad: number): number {
-    const MAX = 0.25;
-    const START_DEG = -0.75;
+    const MAX = 0.2;
+    const START_DEG = 0;
     const PEAK_DEG = -1.25;
     const END_DEG = -2.25;
     const alt = altRad * (180 / Math.PI);
@@ -387,6 +408,12 @@ function getMap(lat: number, lng: number): void {
                     type: "raster",
                     tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
                     tileSize: 256,
+                    // OWM cloud data is intrinsically low-resolution. Capping
+                    // maxzoom makes MapLibre upsample (overzoom) tiles from
+                    // this level instead of requesting deeper tiles, which
+                    // would add more seams and expose pixelation. The linear
+                    // resampling + SVG blur smooth the upsample cleanly.
+                    maxzoom: 6,
                     attribution: "© OpenWeatherMap",
                 },
             },
