@@ -140,18 +140,16 @@ function locationInit(): void {
     }
 
     const cachedPosition = localStorage.getItem("cachedPosition");
-    var usedCachedPosition = false;
     if (cachedPosition) {
         try {
             const { timestamp, coords } = JSON.parse(cachedPosition);
             const age = Date.now() - timestamp;
             if (age < 10 * 60 * 1000) { // 10 minutes
-                usedCachedPosition = true;
                 getWeatherData(coords.latitude, coords.longitude);
                 getMap(coords.latitude, coords.longitude);
-            } else {
-                console.log("Cached position is too old, fetching new position");
+                return;
             }
+            console.log("Cached position is too old, fetching new position");
         } catch (e) {
             console.error("Failed to parse cached position, fetching new position", e);
         }
@@ -161,7 +159,6 @@ function locationInit(): void {
         (position) => {
             cachePosition(position);
             applyLightness(position.coords.latitude, position.coords.longitude);
-            if(usedCachedPosition) return;
             const { latitude, longitude } = position.coords;
             getWeatherData(latitude, longitude);
             getMap(latitude, longitude);
@@ -321,40 +318,39 @@ function getMap(lat: number, lng: number): void {
     const nightGate = gate();
     readinessGates.push(nightGate.promise);
 
-    let nightMap: maplibregl.Map | null = null;
-    let darknessActive = false;
+    if (DEBUG_LAYERS.nightEarth) {
+        const hideDarknessElements = (): void => {
+            for (const id of ["map-lights", "night-overlay", "sunset-overlay"]) {
+                const el = document.getElementById(id);
+                if (el) el.style.display = "none";
+            }
+        };
 
-    const nightMapStyle: maplibregl.StyleSpecification = {
-        version: 8,
-        sources: {
-            "night-earth": {
-                type: "raster",
-                tiles: [
-                    "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Night_Lights/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
-                ],
-                tileSize: 256,
-                maxzoom: 8,
-                attribution: "© NASA GIBS Night Lights",
-            },
-        },
-        layers: [{ id: "night-earth-layer", type: "raster", source: "night-earth" }],
-    };
+        satelliteMap.once("idle", () => {
+            const now = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
+            if (!isAnyDarknessVisible(satelliteMap, now)) {
+                hideDarknessElements();
+                nightGate.resolve();
+                return;
+            }
 
-    const setDarknessElementsVisible = (visible: boolean): void => {
-        const display = visible ? "" : "none";
-        const lights = document.getElementById("map-lights");
-        const dark = document.getElementById("night-overlay");
-        const sunset = document.getElementById("sunset-overlay");
-        if (lights) lights.style.display = display;
-        if (dark) dark.style.display = display;
-        if (sunset) sunset.style.display = display;
-    };
-
-    const ensureNightMapAndUpdate = (date: Date): void => {
-        if (!nightMap) {
-            nightMap = new maplibregl.Map({
+            const nightMap = new maplibregl.Map({
                 container: "map-lights",
-                style: nightMapStyle,
+                style: {
+                    version: 8,
+                    sources: {
+                        "night-earth": {
+                            type: "raster",
+                            tiles: [
+                                "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Night_Lights/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+                            ],
+                            tileSize: 256,
+                            maxzoom: 8,
+                            attribution: "© NASA GIBS Night Lights",
+                        },
+                    },
+                    layers: [{ id: "night-earth-layer", type: "raster", source: "night-earth" }],
+                },
                 center: [lng, lat],
                 zoom: MAP_ZOOM,
                 interactive: false,
@@ -362,38 +358,9 @@ function getMap(lat: number, lng: number): void {
             });
             silenceTileFetchNoise(nightMap);
             nightMap.once("idle", () => {
-                updateTerminatorMask(satelliteMap, date);
+                updateTerminatorMask(satelliteMap, now);
                 nightGate.resolve();
             });
-        } else {
-            updateTerminatorMask(satelliteMap, date);
-        }
-    };
-
-    const evaluateDarknessTick = (): void => {
-        const now = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
-        const shouldRender = DEBUG_LAYERS.nightEarth && isAnyDarknessVisible(satelliteMap, now);
-
-        if (shouldRender && !darknessActive) {
-            darknessActive = true;
-            setDarknessElementsVisible(true);
-            ensureNightMapAndUpdate(now);
-        } else if (!shouldRender && darknessActive) {
-            darknessActive = false;
-            setDarknessElementsVisible(false);
-        } else if (shouldRender && darknessActive) {
-            updateTerminatorMask(satelliteMap, now);
-        }
-    };
-
-    if (DEBUG_LAYERS.nightEarth) {
-        setDarknessElementsVisible(false);
-        satelliteMap.once("idle", () => {
-            evaluateDarknessTick();
-            // If darkness wasn't needed on first eval, the night map will never
-            // be created — resolve the gate now so the reveal isn't blocked.
-            if (!darknessActive) nightGate.resolve();
-            setInterval(evaluateDarknessTick, 60_000);
         });
     } else {
         // Night layer disabled — nothing to wait for.
@@ -442,7 +409,6 @@ function getMap(lat: number, lng: number): void {
             readinessGates.push(cloudsGate.promise);
             m.once("idle", cloudsGate.resolve);
             m.once("load", () => m.resize());
-            window.addEventListener("resize", () => m.resize());
         };
 
         mkCloudsMap("map-clouds");

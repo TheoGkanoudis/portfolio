@@ -53,7 +53,7 @@ body {
 }
 
 #map-lights {
-  filter: contrast(0.6) blur(1px) blur(3px) blur(5px) contrast(0) brightness(2) sepia(1) saturate(2) opacity(0.4);
+  filter: contrast(0.6) blur(1px) blur(3px) blur(5px) contrast(0) brightness(2) sepia(1) saturate(2) opacity(0.45);
   will-change: filter;
 }
 
