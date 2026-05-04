@@ -52,10 +52,8 @@ body {
   }
 }
 
-/* Soften the low-resolution NASA VIIRS night-lights raster. Filters are
-   applied before masks in CSS, so the terminator mask still clips cleanly. */
 #map-lights {
-  filter: blur(2px) contrast(0.1) brightness(10) blur(2px) brightness(0.8);
+  filter: contrast(0.6) blur(1px) blur(3px) blur(5px) contrast(0) brightness(2) sepia(1) saturate(2) opacity(0.4);
   will-change: filter;
 }
 
@@ -71,6 +69,7 @@ body {
 /* Parallax wrapper. Apply transforms here for parallax effects. */
 #parallax-clouds {
   will-change: transform;
+  filter: sepia(1) saturate(5) hue-rotate(180deg) opacity(0.9);
   width: 100%;
   height: 100%;
 }
