@@ -52,6 +52,13 @@ body {
   }
 }
 
+/* Soften the low-resolution NASA VIIRS night-lights raster. Filters are
+   applied before masks in CSS, so the terminator mask still clips cleanly. */
+#map-lights {
+  filter: blur(1px) contrast(0.1) brightness(10) blur(1px) brightness(0.8);
+  will-change: filter;
+}
+
 #night-overlay {
   background: black;
 }
