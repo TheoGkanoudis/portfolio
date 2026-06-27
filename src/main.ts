@@ -1,15 +1,18 @@
-import { fetchWeatherApi } from "openmeteo";
-import jQuery from "jquery";
+import "./style.css";
 import maplibregl from "maplibre-gl";
 import * as SunCalc from "suncalc";
 
-declare const $: typeof jQuery;
-
-const MAP_ZOOM = 8;
+const MAP_ZOOM = 9;
 const OWM_API_KEY = (import.meta as any).env.VITE_OWM_API_KEY as string;
 
 const DEBUG_LOCATION: [number, number] | null = null;
+// sf: [37.76768397896848, -122.43518534355537]
 const DEBUG_TIME: string | null = null;
+// Simulated time runs this many times faster than real time, so you can watch the
+// terminator/sunset overlay sweep and the night-lights fade in within seconds. 1 = real
+// time. Try ~60 for smooth motion (a full day in ~24 min) or ~600 for a fast scrub
+// (steppy — see note below). Ignored when DEBUG_TIME is set (that freezes a single instant).
+const DEBUG_TIME_SCALE = 1;
 
 const DEBUG_LAYERS = {
     satellite: true,
@@ -18,21 +21,45 @@ const DEBUG_LAYERS = {
     sunsetOverlay: true,
 };
 
-function computeLightness(lat: number, lng: number, date: Date): number {
-    const LIGHT = 90;
-    const DARK = 10;
-    const ABOVE_DEG = 0;     // fully light at/above horizon
-    const BELOW_DEG = -2;    // fully dark — matches dark overlay end
-    const altDeg = SunCalc.getPosition(date, lat, lng).altitude * (180 / Math.PI);
-    if (altDeg >= ABOVE_DEG) return LIGHT;
-    if (altDeg <= BELOW_DEG) return DARK;
-    const t = (ABOVE_DEG - altDeg) / (ABOVE_DEG - BELOW_DEG); // 0..1, 0=light
-    const eased = t * t * (3 - 2 * t);
-    return LIGHT + (DARK - LIGHT) * eased;
+const SCREEN_PX_PER_MASK_SAMPLE = 4;
+const SUN_KEYFRAME_INTERVAL_MS = 60_000;
+const OVERLAY_REPAINT_INTERVAL_MS = 2_000;
+const MAX_CACHED_POSITION_AGE_MS = 10 * 60 * 1000;
+
+const RAD_TO_DEG = 180 / Math.PI;
+
+function smoothstep(t: number): number {
+    return t * t * (3 - 2 * t);
 }
 
-function applyLightness(lat: number, lng: number): void {
-    const date = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
+function computeLightness(lat: number, lng: number, date: Date): number {
+    const LIGHT_LIGHTNESS = 90;
+    const DARK_LIGHTNESS = 10;
+    const FULL_LIGHT_ALTITUDE_DEG = 0;
+    const FULL_DARK_ALTITUDE_DEG = -2;
+    const altitudeDeg = SunCalc.getPosition(date, lat, lng).altitude * RAD_TO_DEG;
+    if (altitudeDeg >= FULL_LIGHT_ALTITUDE_DEG) return LIGHT_LIGHTNESS;
+    if (altitudeDeg <= FULL_DARK_ALTITUDE_DEG) return DARK_LIGHTNESS;
+    const darkness = (FULL_LIGHT_ALTITUDE_DEG - altitudeDeg) / (FULL_LIGHT_ALTITUDE_DEG - FULL_DARK_ALTITUDE_DEG);
+    return LIGHT_LIGHTNESS + (DARK_LIGHTNESS - LIGHT_LIGHTNESS) * smoothstep(darkness);
+}
+
+let virtualClockAnchorReal = 0;
+let virtualClockAnchorVirtual = 0;
+let virtualClockStarted = false;
+function currentDate(): Date {
+    if (DEBUG_TIME) return new Date(DEBUG_TIME);
+    if (DEBUG_TIME_SCALE === 1) return new Date();
+    const realNow = Date.now();
+    if (!virtualClockStarted) {
+        virtualClockStarted = true;
+        virtualClockAnchorReal = realNow;
+        virtualClockAnchorVirtual = realNow;
+    }
+    return new Date(virtualClockAnchorVirtual + (realNow - virtualClockAnchorReal) * DEBUG_TIME_SCALE);
+}
+
+function applyLightness(lat: number, lng: number, date: Date = currentDate()): void {
     const value = computeLightness(lat, lng, date);
     document.documentElement.style.setProperty("--lightness", value.toFixed(3));
 }
@@ -53,53 +80,60 @@ function applyLightness(lat: number, lng: number): void {
     }
 })();
 
-$(function () {
+function main(): void {
+    // Signal that the DOM elements and CSS are on the page (independent of the map tile /
+    // weather fetches, which complete later and gate the #map-container fade-in).
+    document.documentElement.setAttribute("data-loaded", "true");
     installCloudAlphaBoostFilter();
     locationInit();
-    initParallaxDragTest(); // TEMP: remove when real parallax is wired up
-});
+    initCloudParallax();
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", main);
+} else {
+    main();
+}
 
 function installCloudAlphaBoostFilter(): void {
     const FILTER_ID = "cloud-alpha-boost";
+    const FILTER_REGION_INSET = "-25%";
+    const FILTER_REGION_SIZE = "150%";
+    const SEAM_BLUR_STD_DEVIATION = "16";
+    const ALPHA_TRANSFER_TABLE =
+        "0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.7 0.7 0.7 0.7";
+
     if (!document.getElementById(FILTER_ID)) {
         const svgNS = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(svgNS, "svg");
         svg.setAttribute("width", "0");
         svg.setAttribute("height", "0");
         svg.style.position = "absolute";
+
         const filter = document.createElementNS(svgNS, "filter");
         filter.setAttribute("id", FILTER_ID);
         filter.setAttribute("color-interpolation-filters", "sRGB");
-        // Pad the filter region generously so a wide blur isn't clipped at
-        // the element edges (otherwise the blur falls off near the borders
-        // and seams near the edge of the viewport remain visible).
-        filter.setAttribute("x", "-25%");
-        filter.setAttribute("y", "-25%");
-        filter.setAttribute("width", "150%");
-        filter.setAttribute("height", "150%");
+        filter.setAttribute("x", FILTER_REGION_INSET);
+        filter.setAttribute("y", FILTER_REGION_INSET);
+        filter.setAttribute("width", FILTER_REGION_SIZE);
+        filter.setAttribute("height", FILTER_REGION_SIZE);
 
-        // OWM `clouds_new` tiles have visible seams because adjacent tiles
-        // hold slightly different per-tile cloud-cover values, producing
-        // sharp alpha discontinuities at tile boundaries. A wide Gaussian
-        // blur smears those step edges into a smooth gradient before we
-        // shape the alpha with the transfer curve. stdDeviation needs to be
-        // large enough to bridge the worst-case alpha jump between two
-        // neighbouring tiles (~150px on screen at the current zoom).
         const blur = document.createElementNS(svgNS, "feGaussianBlur");
-        blur.setAttribute("stdDeviation", "16");
+        blur.setAttribute("stdDeviation", SEAM_BLUR_STD_DEVIATION);
         blur.setAttribute("edgeMode", "duplicate");
         filter.appendChild(blur);
 
         const transfer = document.createElementNS(svgNS, "feComponentTransfer");
         const funcA = document.createElementNS(svgNS, "feFuncA");
         funcA.setAttribute("type", "table");
-        funcA.setAttribute("tableValues", "0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.7 0.7 0.7 0.7");
+        funcA.setAttribute("tableValues", ALPHA_TRANSFER_TABLE);
         transfer.appendChild(funcA);
         filter.appendChild(transfer);
 
         svg.appendChild(filter);
         document.body.appendChild(svg);
     }
+
     const el = document.getElementById("map-clouds");
     if (el) {
         el.style.filter = `url(#${FILTER_ID})`;
@@ -107,24 +141,24 @@ function installCloudAlphaBoostFilter(): void {
     }
 }
 
-// TEMP PARALLAX TEST — remove this function and its call above when no longer needed.
-function initParallaxDragTest(): void {
+function initCloudParallax(): void {
     const el = document.getElementById("parallax-clouds");
     if (!el) return;
-    const MAX = 12; // px — subtle drift relative to mouse position
+    const MAX_DRIFT_PX = 12;
+    const DRIFT_SMOOTHING = 0.08;
     let targetX = 0, targetY = 0;
     let currentX = 0, currentY = 0;
 
     window.addEventListener("mousemove", (e) => {
-        const nx = (e.clientX / window.innerWidth) * 2 - 1;  // -1..1
-        const ny = (e.clientY / window.innerHeight) * 2 - 1;
-        targetX = -nx * MAX;
-        targetY = -ny * MAX;
+        const normalizedX = (e.clientX / window.innerWidth) * 2 - 1;
+        const normalizedY = (e.clientY / window.innerHeight) * 2 - 1;
+        targetX = -normalizedX * MAX_DRIFT_PX;
+        targetY = -normalizedY * MAX_DRIFT_PX;
     });
 
     const tick = () => {
-        currentX += (targetX - currentX) * 0.08;
-        currentY += (targetY - currentY) * 0.08;
+        currentX += (targetX - currentX) * DRIFT_SMOOTHING;
+        currentY += (targetY - currentY) * DRIFT_SMOOTHING;
         el.style.transform = `translate(${currentX.toFixed(2)}px, ${currentY.toFixed(2)}px)`;
         requestAnimationFrame(tick);
     };
@@ -134,7 +168,6 @@ function initParallaxDragTest(): void {
 function locationInit(): void {
     if (DEBUG_LOCATION) {
         const [latitude, longitude] = DEBUG_LOCATION;
-        getWeatherData(latitude, longitude);
         getMap(latitude, longitude);
         return;
     }
@@ -144,8 +177,7 @@ function locationInit(): void {
         try {
             const { timestamp, coords } = JSON.parse(cachedPosition);
             const age = Date.now() - timestamp;
-            if (age < 10 * 60 * 1000) { // 10 minutes
-                getWeatherData(coords.latitude, coords.longitude);
+            if (age < MAX_CACHED_POSITION_AGE_MS) {
                 getMap(coords.latitude, coords.longitude);
                 return;
             }
@@ -160,13 +192,12 @@ function locationInit(): void {
             cachePosition(position);
             applyLightness(position.coords.latitude, position.coords.longitude);
             const { latitude, longitude } = position.coords;
-            getWeatherData(latitude, longitude);
             getMap(latitude, longitude);
         },
         (error) => {
             console.error(error);
         },
-        { enableHighAccuracy: false},
+        { enableHighAccuracy: false },
     );
 
     function cachePosition(position: GeolocationPosition): void {
@@ -181,93 +212,64 @@ function locationInit(): void {
     }
 }
 
-async function getWeatherData(lat: number, long: number): Promise<void> {
-    return
-    const params = {
-        latitude: lat,
-        longitude: long,
-        current: ["temperature_2m", "precipitation", "rain", "snowfall", "visibility"],
-    };
-
-    const url = "https://api.open-meteo.com/v1/forecast";
-    const response = await fetchWeatherApi(url, params);
-    const current = response[0].current()!;
-
-    const weatherData = {
-        temperature: current.variables(0)!.value(),
-        precipitation: current.variables(1)!.value(),
-        rain: current.variables(2)!.value(),
-        snowfall: current.variables(3)!.value(),
-        visibility: current.variables(4)!.value(),
-    };
-
-    $("#temperature").text(`Temperature: ${weatherData.temperature.toFixed(1)}°C`);
-    $("#precipitation").text(`Precipitation: ${weatherData.precipitation} mm`);
-    $("#rain").text(`Rain: ${weatherData.rain} mm`);
-    $("#snowfall").text(`Snowfall: ${weatherData.snowfall} cm`);
-    $("#visibility").text(`Visibility: ${(weatherData.visibility / 1000).toFixed(1)} km`);
+function altitudeToCityLightsOpacity(altitudeRad: number): number {
+    const MAX_OPACITY = 0.55;
+    const FADE_START_DEG = -1.75;
+    const FADE_END_DEG = -2.5;
+    const altitudeDeg = altitudeRad * RAD_TO_DEG;
+    if (altitudeDeg >= FADE_START_DEG) return 0;
+    if (altitudeDeg <= FADE_END_DEG) return MAX_OPACITY;
+    const progress = (FADE_START_DEG - altitudeDeg) / (FADE_START_DEG - FADE_END_DEG);
+    return MAX_OPACITY * smoothstep(progress);
 }
 
-function altitudeToCityLightsOpacity(altRad: number): number {
-    const MAX = 0.55;
-    const START_DEG = -1.75;
-    const END_DEG = -2.5;
-    const alt = altRad * (180 / Math.PI);
-    if (alt >= START_DEG) return 0;
-    if (alt <= END_DEG) return MAX;
-    const t = (START_DEG - alt) / (START_DEG - END_DEG);
-    return MAX * t * t * (3 - 2 * t);
+function altitudeToDarkOverlayOpacity(altitudeRad: number): number {
+    const MAX_OPACITY = 0.7;
+    const FADE_START_DEG = 0;
+    const FADE_END_DEG = -2;
+    const altitudeDeg = altitudeRad * RAD_TO_DEG;
+    if (altitudeDeg >= FADE_START_DEG) return 0;
+    if (altitudeDeg <= FADE_END_DEG) return MAX_OPACITY;
+    const progress = (FADE_START_DEG - altitudeDeg) / (FADE_START_DEG - FADE_END_DEG);
+    return MAX_OPACITY * smoothstep(progress);
 }
 
-function altitudeToDarkOverlayOpacity(altRad: number): number {
-    const MAX = 0.7;
-    const START_DEG = 0;
-    const END_DEG = -2;
-    const alt = altRad * (180 / Math.PI);
-    if (alt >= START_DEG) return 0;
-    if (alt <= END_DEG) return MAX;
-    const t = (START_DEG - alt) / (START_DEG - END_DEG);
-    return MAX * t * t * (3 - 2 * t);
-}
-
-function altitudeToSunsetOverlayOpacity(altRad: number): number {
-    const MAX = 0.2;
-    const START_DEG = 0;
+function altitudeToSunsetOverlayOpacity(altitudeRad: number): number {
+    const MAX_OPACITY = 0.2;
+    const FADE_IN_START_DEG = 0;
     const PEAK_DEG = -1.25;
-    const END_DEG = -2.25;
-    const alt = altRad * (180 / Math.PI);
-    
-    if (alt >= START_DEG) return 0;
-    if (alt <= END_DEG) return 0;
-    
-    if (alt >= PEAK_DEG) {
-        const t = (START_DEG - alt) / (START_DEG - PEAK_DEG);
-        return MAX * t * t * (3 - 2 * t);
-    } else {
-        const t = (alt - END_DEG) / (PEAK_DEG - END_DEG);
-        return MAX * t * t * (3 - 2 * t);
+    const FADE_OUT_END_DEG = -2.25;
+    const altitudeDeg = altitudeRad * RAD_TO_DEG;
+
+    if (altitudeDeg >= FADE_IN_START_DEG) return 0;
+    if (altitudeDeg <= FADE_OUT_END_DEG) return 0;
+
+    if (altitudeDeg >= PEAK_DEG) {
+        const progress = (FADE_IN_START_DEG - altitudeDeg) / (FADE_IN_START_DEG - PEAK_DEG);
+        return MAX_OPACITY * smoothstep(progress);
     }
+    const progress = (altitudeDeg - FADE_OUT_END_DEG) / (PEAK_DEG - FADE_OUT_END_DEG);
+    return MAX_OPACITY * smoothstep(progress);
 }
 
 function isAnyDarknessVisible(map: maplibregl.Map, date: Date): boolean {
-    const c = map.getContainer();
-    const W = c.clientWidth, H = c.clientHeight;
-    const N = 5; // 5x5 sample grid
-    const THRESHOLD_DEG = 0.25; // small positive epsilon — start a hair before true sunset
-    for (let iy = 0; iy < N; iy++) {
-        for (let ix = 0; ix < N; ix++) {
-            const px = (ix / (N - 1)) * W;
-            const py = (iy / (N - 1)) * H;
-            const ll = map.unproject([px, py] as [number, number]);
-            const altDeg = SunCalc.getPosition(date, ll.lat, ll.lng).altitude * (180 / Math.PI);
-            if (altDeg < THRESHOLD_DEG) return true;
+    const SAMPLES_PER_AXIS = 5;
+    const DARKNESS_THRESHOLD_DEG = 0.25;
+    const container = map.getContainer();
+    const width = container.clientWidth, height = container.clientHeight;
+    for (let iy = 0; iy < SAMPLES_PER_AXIS; iy++) {
+        for (let ix = 0; ix < SAMPLES_PER_AXIS; ix++) {
+            const px = (ix / (SAMPLES_PER_AXIS - 1)) * width;
+            const py = (iy / (SAMPLES_PER_AXIS - 1)) * height;
+            const lngLat = map.unproject([px, py] as [number, number]);
+            const altitudeDeg = SunCalc.getPosition(date, lngLat.lat, lngLat.lng).altitude * RAD_TO_DEG;
+            if (altitudeDeg < DARKNESS_THRESHOLD_DEG) return true;
         }
     }
     return false;
 }
 
 function getMap(lat: number, lng: number): void {
-    // --- Satellite map (bottom layer) ---
     const satelliteMap = new maplibregl.Map({
         container: "map",
         style: {
@@ -276,7 +278,10 @@ function getMap(lat: number, lng: number): void {
                 "satellite": {
                     type: "raster",
                     tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-                    tileSize: 256,
+                    // tileSize decouples imagery detail from framing: MapLibre fetches source
+                    // zoom ≈ MAP_ZOOM + log2(512 / tileSize). At 128 a zoom-7 view is sourced
+                    // from z9 tiles (sharper) without changing how much of the map is shown.
+                    tileSize: 128,
                     maxzoom: 14,
                     attribution: "Sentinel-2 cloudless by EOX",
                 },
@@ -300,10 +305,6 @@ function getMap(lat: number, lng: number): void {
     };
     silenceTileFetchNoise(satelliteMap);
 
-    // Track readiness of every map that needs to render before we reveal the
-    // container. Each gate resolves once that map's first "idle" fires (or, for
-    // the night map, once we know it's not needed). When all gates have
-    // resolved, the container gets `.show` and fades in.
     const readinessGates: Promise<void>[] = [];
     const gate = (): { promise: Promise<void>; resolve: () => void } => {
         let resolve!: () => void;
@@ -311,31 +312,45 @@ function getMap(lat: number, lng: number): void {
         return { promise, resolve };
     };
 
-    const satelliteGate = gate();
-    readinessGates.push(satelliteGate.promise);
-    satelliteMap.once("idle", satelliteGate.resolve);
+    // Resolve only once every requested tile for this map has actually loaded. A single
+    // "idle" can fire before all tiles are in (e.g. right after a resize re-requests tiles,
+    // or while tiles are still streaming), so re-arm on each idle until areTilesLoaded()
+    // confirms there is nothing left to fetch.
+    const tilesLoaded = (m: maplibregl.Map): Promise<void> =>
+        new Promise<void>(resolve => {
+            const check = (): void => {
+                if (m.areTilesLoaded()) resolve();
+                else m.once("idle", check);
+            };
+            m.once("idle", check);
+        });
+
+    readinessGates.push(tilesLoaded(satelliteMap));
 
     const nightGate = gate();
     readinessGates.push(nightGate.promise);
 
     if (DEBUG_LAYERS.nightEarth) {
-        const hideDarknessElements = (): void => {
-            for (const id of ["map-lights", "night-overlay", "sunset-overlay"]) {
-                const el = document.getElementById(id);
-                if (el) el.style.display = "none";
-            }
-        };
+        let nightMapCreated = false;
+        const ensureNightMap = (): { map: maplibregl.Map; container: HTMLElement } | null => {
+            if (nightMapCreated) return null;
+            if (!isAnyDarknessVisible(satelliteMap, currentDate())) return null;
+            nightMapCreated = true;
 
-        satelliteMap.once("idle", () => {
-            const now = DEBUG_TIME ? new Date(DEBUG_TIME) : new Date();
-            if (!isAnyDarknessVisible(satelliteMap, now)) {
-                hideDarknessElements();
-                nightGate.resolve();
-                return;
-            }
+            const mapLightsElement = document.getElementById("map-lights")!;
+            const rect = mapLightsElement.getBoundingClientRect();
+            const captureContainer = document.createElement("div");
+            captureContainer.style.position = "fixed";
+            captureContainer.style.left = "0";
+            captureContainer.style.top = "0";
+            captureContainer.style.opacity = "0";
+            captureContainer.style.pointerEvents = "none";
+            captureContainer.style.width = `${Math.max(1, Math.round(rect.width))}px`;
+            captureContainer.style.height = `${Math.max(1, Math.round(rect.height))}px`;
+            document.body.appendChild(captureContainer);
 
             const nightMap = new maplibregl.Map({
-                container: "map-lights",
+                container: captureContainer,
                 style: {
                     version: 8,
                     sources: {
@@ -355,15 +370,20 @@ function getMap(lat: number, lng: number): void {
                 zoom: MAP_ZOOM,
                 interactive: false,
                 trackResize: false,
+                canvasContextAttributes: { preserveDrawingBuffer: true },
             });
             silenceTileFetchNoise(nightMap);
-            nightMap.once("idle", () => {
-                updateTerminatorMask(satelliteMap, now);
-                nightGate.resolve();
-            });
+            return { map: nightMap, container: captureContainer };
+        };
+
+        satelliteMap.once("idle", () => {
+            startTerminatorUpdates(satelliteMap, [lng, lat], ensureNightMap, nightGate.resolve);
         });
     } else {
-        // Night layer disabled — nothing to wait for.
+        for (const id of ["map-lights", "night-overlay", "sunset-overlay"]) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = "none";
+        }
         nightGate.resolve();
     }
 
@@ -375,11 +395,6 @@ function getMap(lat: number, lng: number): void {
                     type: "raster",
                     tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
                     tileSize: 256,
-                    // OWM cloud data is intrinsically low-resolution. Capping
-                    // maxzoom makes MapLibre upsample (overzoom) tiles from
-                    // this level instead of requesting deeper tiles, which
-                    // would add more seams and expose pixelation. The linear
-                    // resampling + SVG blur smooth the upsample cleanly.
                     maxzoom: 6,
                     attribution: "© OpenWeatherMap",
                 },
@@ -396,85 +411,190 @@ function getMap(lat: number, lng: number): void {
             }],
         });
 
-        const mkCloudsMap = (containerId: string) => {
-            const m = new maplibregl.Map({
+        const createCloudsMap = (containerId: string) => {
+            const cloudsMap = new maplibregl.Map({
                 container: containerId,
                 style: cloudStyle(),
                 center: [lng, lat],
                 zoom: MAP_ZOOM,
                 interactive: false,
             });
-            silenceTileFetchNoise(m);
-            const cloudsGate = gate();
-            readinessGates.push(cloudsGate.promise);
-            m.once("idle", cloudsGate.resolve);
-            m.once("load", () => m.resize());
+            silenceTileFetchNoise(cloudsMap);
+            readinessGates.push(tilesLoaded(cloudsMap));
+            cloudsMap.once("load", () => cloudsMap.resize());
         };
 
-        mkCloudsMap("map-clouds");
+        createCloudsMap("map-clouds");
     }
 
-    // All gates registered above synchronously. Reveal the container once they
-    // all resolve. Use a snapshot so a later push (e.g. a future re-creation)
-    // can't add a new pending gate after we've already started waiting.
-    Promise.all(readinessGates.slice()).then(() => {
+    Promise.all(readinessGates).then(() => {
         const container = document.getElementById("map-container");
         if (container) container.classList.add("show");
     });
 }
 
-function applyMask(el: HTMLElement, dataUrl: string): void {
-    el.style.maskImage = `url(${dataUrl})`;
-    (el.style as any).webkitMaskImage = `url(${dataUrl})`;
-    el.style.maskSize = "100% 100%";
-    (el.style as any).webkitMaskSize = "100% 100%";
-    el.style.maskRepeat = "no-repeat";
-    (el.style as any).webkitMaskRepeat = "no-repeat";
+interface SampleGrid {
+    cols: number;
+    rows: number;
+    lat: Float64Array;
+    lng: Float64Array;
 }
 
-function updateTerminatorMask(map: maplibregl.Map, date: Date): void {
+function buildSampleGrid(map: maplibregl.Map): SampleGrid {
     const container = map.getContainer();
-    const W = container.clientWidth;
-    const H = container.clientHeight;
-
-    const SCALE = 4;
-    const sw = Math.ceil(W / SCALE);
-    const sh = Math.ceil(H / SCALE);
-
-    const mkCanvas = () => { const c = document.createElement("canvas"); c.width = sw; c.height = sh; return c; };
-    const nightCanvas = mkCanvas(), darkCanvas = mkCanvas(), sunsetCanvas = DEBUG_LAYERS.sunsetOverlay ? mkCanvas() : null;
-    const nightCtx = nightCanvas.getContext("2d")!, darkCtx = darkCanvas.getContext("2d")!, sunsetCtx = sunsetCanvas ? sunsetCanvas.getContext("2d")! : null;
-    const nightData = nightCtx.createImageData(sw, sh);
-    const darkData = darkCtx.createImageData(sw, sh);
-    const sunsetData = sunsetCtx ? sunsetCtx.createImageData(sw, sh) : null;
-
-    for (let y = 0; y < sh; y++) {
-        for (let x = 0; x < sw; x++) {
-            const lngLat = map.unproject([(x + 0.5) * SCALE, (y + 0.5) * SCALE] as [number, number]);
-            const { altitude } = SunCalc.getPosition(date, lngLat.lat, lngLat.lng);
-            const i = (y * sw + x) * 4;
-
-            nightData.data[i] = nightData.data[i+1] = nightData.data[i+2] = 255;
-            nightData.data[i+3] = Math.round(altitudeToCityLightsOpacity(altitude) * 255);
-
-            darkData.data[i] = darkData.data[i+1] = darkData.data[i+2] = 255;
-            darkData.data[i+3] = Math.round(altitudeToDarkOverlayOpacity(altitude) * 255);
-
-            if (sunsetData) {
-                sunsetData.data[i] = sunsetData.data[i+1] = sunsetData.data[i+2] = 255;
-                sunsetData.data[i+3] = Math.round(altitudeToSunsetOverlayOpacity(altitude) * 255);
-            }
+    const cols = Math.max(1, Math.ceil(container.clientWidth / SCREEN_PX_PER_MASK_SAMPLE));
+    const rows = Math.max(1, Math.ceil(container.clientHeight / SCREEN_PX_PER_MASK_SAMPLE));
+    const lat = new Float64Array(cols * rows);
+    const lng = new Float64Array(cols * rows);
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            const lngLat = map.unproject([(x + 0.5) * SCREEN_PX_PER_MASK_SAMPLE, (y + 0.5) * SCREEN_PX_PER_MASK_SAMPLE] as [number, number]);
+            const i = y * cols + x;
+            lat[i] = lngLat.lat;
+            lng[i] = lngLat.lng;
         }
     }
+    return { cols, rows, lat, lng };
+}
 
-    nightCtx.putImageData(nightData, 0, 0);
-    applyMask(document.getElementById("map-lights")!, nightCanvas.toDataURL("image/png"));
+interface OverlayAlphas {
+    cityLights: Uint8Array;
+    darkness: Uint8Array;
+    sunset: Uint8Array | null;
+}
 
-    darkCtx.putImageData(darkData, 0, 0);
-    applyMask(document.getElementById("night-overlay")!, darkCanvas.toDataURL("image/png"));
-
-    if (sunsetCtx && sunsetData) {
-        sunsetCtx.putImageData(sunsetData, 0, 0);
-        applyMask(document.getElementById("sunset-overlay")!, sunsetCanvas!.toDataURL("image/png"));
+function computeOverlayAlphas(grid: SampleGrid, date: Date): OverlayAlphas {
+    const sampleCount = grid.cols * grid.rows;
+    const cityLights = new Uint8Array(sampleCount);
+    const darkness = new Uint8Array(sampleCount);
+    const sunset = DEBUG_LAYERS.sunsetOverlay ? new Uint8Array(sampleCount) : null;
+    for (let i = 0; i < sampleCount; i++) {
+        const { altitude } = SunCalc.getPosition(date, grid.lat[i], grid.lng[i]);
+        cityLights[i] = (altitudeToCityLightsOpacity(altitude) * 255) | 0;
+        darkness[i] = (altitudeToDarkOverlayOpacity(altitude) * 255) | 0;
+        if (sunset) sunset[i] = (altitudeToSunsetOverlayOpacity(altitude) * 255) | 0;
     }
+    return { cityLights, darkness, sunset };
+}
+
+interface OverlayLayer {
+    canvas: HTMLCanvasElement;
+    ctx: CanvasRenderingContext2D;
+    img: ImageData;
+    readyToPaint: boolean;
+}
+
+function makeOverlayLayer(elementId: string, grid: SampleGrid, tint: [number, number, number] | null): OverlayLayer | null {
+    const el = document.getElementById(elementId);
+    if (!el) return null;
+    el.style.backgroundColor = "transparent";
+
+    const canvas = document.createElement("canvas");
+    canvas.width = grid.cols;
+    canvas.height = grid.rows;
+    canvas.style.position = "absolute";
+    canvas.style.inset = "0";
+
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(grid.cols, grid.rows);
+    if (tint) {
+        for (let j = 0; j < img.data.length; j += 4) {
+            img.data[j] = tint[0];
+            img.data[j + 1] = tint[1];
+            img.data[j + 2] = tint[2];
+        }
+    }
+    el.appendChild(canvas);
+
+    return { canvas, ctx, img, readyToPaint: tint !== null };
+}
+
+function paintOverlay(layer: OverlayLayer | null, from: Uint8Array, to: Uint8Array, t: number): void {
+    if (!layer || !layer.readyToPaint) return;
+    const data = layer.img.data;
+    for (let i = 0, j = 3; i < from.length; i++, j += 4) {
+        data[j] = (from[i] + (to[i] - from[i]) * t) | 0;
+    }
+    layer.ctx.putImageData(layer.img, 0, 0);
+}
+
+function snapshotNightLights(map: maplibregl.Map, layer: OverlayLayer, grid: SampleGrid): void {
+    const scratch = document.createElement("canvas");
+    scratch.width = grid.cols;
+    scratch.height = grid.rows;
+    const scratchCtx = scratch.getContext("2d")!;
+    scratchCtx.drawImage(map.getCanvas(), 0, 0, grid.cols, grid.rows);
+    const snapshot = scratchCtx.getImageData(0, 0, grid.cols, grid.rows).data;
+    const target = layer.img.data;
+    for (let k = 0; k < target.length; k += 4) {
+        target[k] = snapshot[k];
+        target[k + 1] = snapshot[k + 1];
+        target[k + 2] = snapshot[k + 2];
+    }
+    layer.readyToPaint = true;
+}
+
+function startTerminatorUpdates(
+    map: maplibregl.Map,
+    center: [number, number],
+    ensureNightMap: () => { map: maplibregl.Map; container: HTMLElement } | null,
+    onReady: () => void,
+): void {
+    const grid = buildSampleGrid(map);
+    const darknessLayer = makeOverlayLayer("night-overlay", grid, [0, 0, 0]);
+    const sunsetLayer = DEBUG_LAYERS.sunsetOverlay ? makeOverlayLayer("sunset-overlay", grid, [255, 115, 0]) : null;
+    const cityLightsLayer = makeOverlayLayer("map-lights", grid, null);
+    const [lng, lat] = center;
+
+    let fromTime = currentDate();
+    let fromAlphas = computeOverlayAlphas(grid, fromTime);
+    let toTime = new Date(fromTime.getTime() + SUN_KEYFRAME_INTERVAL_MS);
+    let toAlphas = computeOverlayAlphas(grid, toTime);
+
+    const currentInterpolation = (): number => {
+        const span = toTime.getTime() - fromTime.getTime();
+        return span > 0 ? Math.min(1, Math.max(0, (currentDate().getTime() - fromTime.getTime()) / span)) : 1;
+    };
+
+    const render = (t: number): void => {
+        paintOverlay(darknessLayer, fromAlphas.darkness, toAlphas.darkness, t);
+        if (sunsetLayer && fromAlphas.sunset && toAlphas.sunset) paintOverlay(sunsetLayer, fromAlphas.sunset, toAlphas.sunset, t);
+        paintOverlay(cityLightsLayer, fromAlphas.cityLights, toAlphas.cityLights, t);
+    };
+
+    const acquireNightLights = (done: () => void): void => {
+        const created = ensureNightMap();
+        if (!created) { done(); return; }
+        created.map.once("idle", () => {
+            try {
+                if (cityLightsLayer) snapshotNightLights(created.map, cityLightsLayer, grid);
+            } catch (e) {
+                console.error("night-lights snapshot failed", e);
+            }
+            created.map.remove();
+            created.container.remove();
+            render(currentInterpolation());
+            done();
+        });
+    };
+
+    applyLightness(lat, lng, fromTime);
+    render(0);
+    acquireNightLights(onReady);
+
+    if (DEBUG_TIME) return;
+
+    setInterval(() => {
+        if (document.hidden) return;
+        const now = currentDate().getTime();
+        if (now >= toTime.getTime()) {
+            fromTime = new Date(now);
+            fromAlphas = computeOverlayAlphas(grid, fromTime);
+            toTime = new Date(now + SUN_KEYFRAME_INTERVAL_MS);
+            toAlphas = computeOverlayAlphas(grid, toTime);
+            acquireNightLights(() => {});
+        }
+        render(currentInterpolation());
+        applyLightness(lat, lng, new Date(now));
+    }, OVERLAY_REPAINT_INTERVAL_MS);
 }

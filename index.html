@@ -6,9 +6,20 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>portfolio</title>
-  <link rel="stylesheet" href="/src/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css" />
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <style>
+    html:not([data-loaded]) body {
+      visibility: hidden;
+
+      & #map-container {
+        opacity: 0;
+      }
+    }
+
+    body {
+      background: hsl(215 5 var(--lightness, 50));
+    }
+  </style>
   <script type="module" src="/src/main.ts"></script>
 </head>
 
@@ -21,13 +32,15 @@
     <div id="night-overlay"></div>
     <div id="sunset-overlay"></div>
     <div id="map-lights"></div>
+    <div id="blur"></div>
   </div>
-  <div id="weather">
-    <p id="temperature">?</p>
-    <p id="precipitation">?</p>
-    <p id="rain">?</p>
-    <p id="snowfall">?</p>
-    <p id="visibility">?</p>
+  <div id="content">
+    <section id="welcome">
+      <div class="text-block">
+        <h1>Welcome</h1>
+        <h3>This is Theo</h3>
+      </div>
+    </section>
   </div>
 </body>
 

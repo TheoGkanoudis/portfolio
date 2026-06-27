@@ -3,7 +3,17 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tgk\\\\OneDrive - Abakion\\\\Apps\\\\Skrivebord\\\\Theo\\\\personal\\\\projects\\\\portfolio\" -Force)",
       "Bash(npm install *)",
-      "Bash(node -e \"console.log\\(require\\('./node_modules/maplibre-gl/package.json'\\).version\\)\")"
+      "Bash(node -e \"console.log\\(require\\('./node_modules/maplibre-gl/package.json'\\).version\\)\")",
+      "Bash(ls .cursor .cursorrules .github)",
+      "Bash(cat .cursorrules)",
+      "Bash(cat .github/copilot-instructions.md)",
+      "Bash(ls .cursor/rules)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(curl *)",
+      "Bash(echo \"---EXIT: $?---\")",
+      "Bash(git log *)"
     ]
   }
 }
