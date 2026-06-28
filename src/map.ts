@@ -34,7 +34,7 @@ function currentDate(): Date {
 
 export function applyLightness(lat: number, lng: number, date: Date = currentDate()): void {
     const value = computeLightness(lat, lng, date);
-    document.documentElement.style.setProperty("--lightness", value.toFixed(3));
+    $("html").css("--lightness", value.toFixed(3));
 }
 
 function altitudeToCityLightsOpacity(altitudeRad: number): number {
@@ -164,16 +164,15 @@ function installCloudAlphaBoostFilter(alphaTransferTable: string): void {
         document.body.appendChild(svg);
     }
 
-    const el = document.getElementById("map-clouds");
-    if (el) {
-        el.style.filter = `url(#${FILTER_ID}) opacity(${opacity})`;
-        el.style.willChange = "filter";
-    }
+    $("#map-clouds").css({
+        filter: `url(#${FILTER_ID}) opacity(${opacity})`,
+        willChange: "filter",
+    });
 }
 
 function installCloudBlurMask(cloudsMap: maplibregl.Map, coverageLow: number, coverageHigh: number): void {
-    const el = document.getElementById("cloud-blur");
-    if (!el) return;
+    const $el = $("#cloud-blur");
+    if (!$el.length) return;
 
     const source = cloudsMap.getCanvas();
     const downscale = SETTINGS.cloudBlurMaskDownscale;
@@ -197,20 +196,19 @@ function installCloudBlurMask(cloudsMap: maplibregl.Map, coverageLow: number, co
     ctx.putImageData(img, 0, 0);
 
     const maskUrl = `url(${scratch.toDataURL()})`;
-    el.style.maskImage = maskUrl;
-    el.style.setProperty("-webkit-mask-image", maskUrl);
+    $el.css({ maskImage: maskUrl, "-webkit-mask-image": maskUrl });
 }
 
 export function initCloudParallax(): void {
-    const cloudsEl = document.getElementById("parallax-clouds");
-    if (!cloudsEl) return;
-    const blurEl = document.getElementById("cloud-blur");
+    const $clouds = $("#parallax-clouds");
+    if (!$clouds.length) return;
+    const $blur = $("#cloud-blur");
 
     const { maxDriftPx, smoothing } = SETTINGS.cloudParallax;
     let targetX = 0, targetY = 0;
     let currentX = 0, currentY = 0;
 
-    window.addEventListener("mousemove", (e) => {
+    $(window).on("mousemove", (e: any) => {
         const normalizedX = (e.clientX / window.innerWidth) * 2 - 1;
         const normalizedY = (e.clientY / window.innerHeight) * 2 - 1;
         targetX = -normalizedX * maxDriftPx;
@@ -221,8 +219,8 @@ export function initCloudParallax(): void {
         currentX += (targetX - currentX) * smoothing;
         currentY += (targetY - currentY) * smoothing;
         const transform = `translate(${currentX.toFixed(2)}px, ${currentY.toFixed(2)}px)`;
-        cloudsEl.style.transform = transform;
-        if (blurEl) blurEl.style.transform = transform;
+        $clouds.css("transform", transform);
+        $blur.css("transform", transform);
         requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -327,10 +325,7 @@ function createNightLightsCapture(lat: number, lng: number): { map: maplibregl.M
 
 function setupNightLayers(satelliteMap: maplibregl.Map, lat: number, lng: number, nightGate: Gate): void {
     if (!SETTINGS.debug.layers.nightEarth) {
-        for (const id of ["map-lights", "night-overlay", "sunset-overlay"]) {
-            const el = document.getElementById(id);
-            if (el) el.style.display = "none";
-        }
+        $("#map-lights, #night-overlay, #sunset-overlay").hide();
         nightGate.resolve();
         return;
     }
@@ -388,7 +383,7 @@ function setupClouds(lat: number, lng: number, gates: Promise<void>[]): void {
 function revealWhenReady(satelliteMap: maplibregl.Map): void {
     satelliteMap.resize();
     requestAnimationFrame(() => {
-        document.getElementById("map-container")?.classList.add("show");
+        $("html").attr("ready", "true");
     });
 }
 

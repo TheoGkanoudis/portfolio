@@ -93,7 +93,7 @@ export const SETTINGS = {
         tileSize: 256,
         maxzoom: 7,
         attribution: "© Deutscher Wetterdienst / EUMETSAT",
-        alphaTable: "0 0.02 0.08 0.19 0.37 0.55 0.65 0.7 0.74 0.76 0.78 0.79 0.8",
+        alphaTable: "0 0.03 0.08 0.2 0.4 0.58 0.7 0.76 0.79 0.8",
         blurCoverage: [0.15, 0.55] as [number, number],
     },
 
@@ -102,15 +102,15 @@ export const SETTINGS = {
         tileSize: 256,
         maxzoom: 6,
         attribution: "© NASA GIBS / NOAA / JMA",
-        alphaTable: "0 0 0 0 0.03 0.08 0.2 0.4 0.58 0.7 0.76 0.79 0.8",
+        alphaTable: "0 0.03 0.08 0.2 0.4 0.58 0.7 0.76 0.79 0.8",
         blurCoverage: [0.45, 0.78] as [number, number],
     },
 };
 
-//SETTINGS.debug.location = [37.76768397896848, -122.43518534355537] // San Francisco
-//SETTINGS.debug.location = [51.5074, -0.1278] // London
-//SETTINGS.debug.location = [37.9838, 23.7275] // Athens
-//SETTINGS.debug.location = [48.198514822371735, -106.62992896455773] // Glagow, MT
+//SETTINGS.debug.location = [37.76768397896848, -122.43518534355537]; // San Francisco
+//SETTINGS.debug.location = [51.5074, -0.1278]; // London
+//SETTINGS.debug.location = [37.9838, 23.7275]; // Athens
+//SETTINGS.debug.location = [48.198514822371735, -106.62992896455773]; // Glagow, MT
 
 (function initLightnessEarly() {
     const debugLocation = SETTINGS.debug.location;
@@ -130,7 +130,7 @@ export const SETTINGS = {
 })();
 
 function main(): void {
-    document.documentElement.setAttribute("data-loaded", "true");
+    $("html").attr("data-loaded", "true");
     locationInit();
     initCloudParallax();
 }
@@ -182,8 +182,4 @@ function cachePosition(position: GeolocationPosition): void {
     localStorage.setItem("cachedPosition", JSON.stringify(cacheData));
 }
 
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", main);
-} else {
-    main();
-}
+$(main);

@@ -40,6 +40,22 @@ body {
   transition: background var(--transTime) ease;
 }
 
+html[ready] {
+  & #map-container {
+    opacity: 1;
+  }
+
+  & #loader {
+    opacity: 0;
+    pointer-events: none;
+
+    & .spinner {
+      scale: 1000%;
+      opacity: 0;
+    }
+  }
+}
+
 #map-container {
   pointer-events: none;
   position: fixed;
@@ -48,10 +64,6 @@ body {
   width: 100vw;
   height: 100dvh;
   transition: opacity 1s ease;
-
-  &.show {
-    opacity: 1;
-  }
 
   & #map,
   & #map-lights,

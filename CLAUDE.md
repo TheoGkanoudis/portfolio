@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Instead of comments, write readable and self-explanatory code.
 - Prefer an object-centered approach where applicable and logical
+- prefer to solve things through css instead of js (.hide class instead of js hide)
+- avoid doing excessive styling, instead leave that up to the user
 
 ## Commands
 
@@ -32,7 +34,7 @@ A single-page visualization (no framework) that renders the viewer's current geo
 - `#night-overlay` — darkness overlay for night.
 - `#sunset-overlay` — warm tint near the terminator.
 - `#map-lights` — NASA VIIRS night-lights raster, shown only where dark.
-- `#cloud-blur` — a `backdrop-filter: blur()` layer masked to cloud coverage, so the layers beneath read as softly out-of-focus under dense cloud (see *Cloud blur*).
+- `#cloud-blur` — a `backdrop-filter: blur()` layer masked to cloud coverage, so the layers beneath read as softly out-of-focus under dense cloud (see _Cloud blur_).
 
 ### Location flow
 
@@ -56,18 +58,20 @@ The city-lights imagery comes from `snapshotNightLights()`: the NASA night-light
 
 `renderMap()` uses a "gate" pattern: each layer that must paint registers a promise resolved on its MapLibre `idle` event. The night gate is resolved from inside `startTerminatorUpdates()` (via `acquireNightLights`) — immediately if no darkness is visible, otherwise after the night-lights snapshot is taken. `#map-container` starts at `opacity: 0` and only gets the `.show` class — fading in — once `Promise.all` of every gate resolves, so the user never sees layers pop in one at a time.
 
+A `#loader` spinner covers the screen until then. It is defined inline in `index.html` (markup + CSS in the head `<style>`, no JS/asset dependency) so it paints on the very first frame, and is marked `visibility: visible` to stay shown while the `data-loaded` gate keeps the rest of `body` hidden. `revealWhenReady()` (the `Promise.all` callback) adds `.hidden` to fade it out and removes it on `transitionend`, crossfading into the map. Note there is no timeout — the loader's lifetime is exactly the reveal's, so a tile source that never settles would keep it visible (same risk the reveal already had).
+
 ### Cloud rendering
 
 The cloud source is **chosen by the viewer's longitude** in `cloudSourceFor()`, because no single keyless feed covers the whole globe well:
 
 - **Europe / Africa / Atlantic** (`-70°..60°`): DWD's free Meteosat mosaic (`Satellite_meteosat_1km_euat_rgb_day_hrv_and_night_ir108_3h` — real clouds, 1 km, day HRV + night IR, ~15 min). Served as a **WMS** whose tile URL ends in `&bbox={bbox-epsg-3857}` (MapLibre fills the placeholder per tile), so **no runtime fetch**. This is the sharpest source; it just happens to be regional (Meteosat is geostationary at 0°, and DWD crops to the `euat` window).
-- **Everywhere else**: NASA GIBS **Band13 "Clean Infrared"** from the nearest geostationary satellite — `GOES-West` / `GOES-East` / `Himawari` (picked by longitude). Keyless WMTS XYZ (`/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`; `time=default` = latest, so still no metadata fetch). Near-global, transparent off the satellite disk. The weakest seam is ~60–80°E (India / W. Indian Ocean), between Meteosat and Himawari. *Why IR, not GIBS GeoColor:* GeoColor is true-colour, so bright deserts/snow would key as false clouds, and it isn't published in Web Mercator for Himawari; single-band IR reads cold cloud tops as bright over a dark surface, matching the luminance pipeline. *(RainViewer, referenced in older docs, discontinued its public satellite feed — radar only now.)*
+- **Everywhere else**: NASA GIBS **Band13 "Clean Infrared"** from the nearest geostationary satellite — `GOES-West` / `GOES-East` / `Himawari` (picked by longitude). Keyless WMTS XYZ (`/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`; `time=default` = latest, so still no metadata fetch). Near-global, transparent off the satellite disk. The weakest seam is ~60–80°E (India / W. Indian Ocean), between Meteosat and Himawari. _Why IR, not GIBS GeoColor:_ GeoColor is true-colour, so bright deserts/snow would key as false clouds, and it isn't published in Web Mercator for Himawari; single-band IR reads cold cloud tops as bright over a dark surface, matching the luminance pipeline. _(RainViewer, referenced in older docs, discontinued its public satellite feed — radar only now.)_
 
 All sources are opaque-ish imagery (clouds bright, clear sky dark), not ready-made transparent overlays. `installCloudAlphaBoostFilter(alphaTable)` builds the inline SVG filter `#cloud-alpha-boost` (set on `#map-clouds`) that converts brightness into a white cloud veil: `feColorMatrix type="luminanceToAlpha"`, a `feComponentTransfer` table (`alphaTable`) that thresholds out the dim floor and ramps clouds up (capped <1), a small `feGaussianBlur` for seams, then `feFlood` white + `feComposite operator="in"`. The table is **source-dependent** (`cloudSourceFor` returns it): IR clear sky is mid-grey rather than black, so the IR table starts its ramp later than the DWD one. `maxzoom` overzooms the coarse source (7 for DWD, 6 for the GIBS IR layers).
 
 ### Cloud blur
 
-`#cloud-blur` makes the layers below it (satellite + the lighting/night-lights overlays) read as out-of-focus under dense cloud. It is a plain `backdrop-filter: blur()` element placed **above** `#map-lights` in paint order, so its backdrop is the full composited stack beneath it. A `backdrop-filter` is *not* shaped by the element's own content alpha — only by a CSS `mask` — so the cloud shape has to be supplied as a mask: `installCloudBlurMask()` reads the loaded cloud canvas back (the cloud map sets `preserveDrawingBuffer: true` for this), converts cloud luminance into an alpha coverage ramp (`smoothstep` over `COVERAGE_LOW..HIGH`), and installs the result as the element's `mask-image`. Where the mask is opaque the backdrop is blurred; over clear sky / outside the DWD footprint the mask is transparent and the blur vanishes. The element starts with a fully-transparent CSS mask so it does nothing until the snapshot lands. `#cloud-blur` mirrors `#map-clouds`'s geometry (`inset: -10%; 120%`) and `initCloudParallax()` applies the **same** drift transform to both, so the mask stays registered with the veil. Note this is the keyless reuse of the `snapshotNightLights()` readback trick; the mask is captured once (clouds are static after load, since runtime tile updating was removed).
+`#cloud-blur` makes the layers below it (satellite + the lighting/night-lights overlays) read as out-of-focus under dense cloud. It is a plain `backdrop-filter: blur()` element placed **above** `#map-lights` in paint order, so its backdrop is the full composited stack beneath it. A `backdrop-filter` is _not_ shaped by the element's own content alpha — only by a CSS `mask` — so the cloud shape has to be supplied as a mask: `installCloudBlurMask()` reads the loaded cloud canvas back (the cloud map sets `preserveDrawingBuffer: true` for this), converts cloud luminance into an alpha coverage ramp (`smoothstep` over `COVERAGE_LOW..HIGH`), and installs the result as the element's `mask-image`. Where the mask is opaque the backdrop is blurred; over clear sky / outside the DWD footprint the mask is transparent and the blur vanishes. The element starts with a fully-transparent CSS mask so it does nothing until the snapshot lands. `#cloud-blur` mirrors `#map-clouds`'s geometry (`inset: -10%; 120%`) and `initCloudParallax()` applies the **same** drift transform to both, so the mask stays registered with the veil. Note this is the keyless reuse of the `snapshotNightLights()` readback trick; the mask is captured once (clouds are static after load, since runtime tile updating was removed).
 
 ### Conventions / gotchas
 
