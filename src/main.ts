@@ -3,15 +3,13 @@ import maplibregl from "maplibre-gl";
 import * as SunCalc from "suncalc";
 
 const MAP_ZOOM = 9;
-const OWM_API_KEY = (import.meta as any).env.VITE_OWM_API_KEY as string;
 
-const DEBUG_LOCATION: [number, number] | null = null;
-// sf: [37.76768397896848, -122.43518534355537]
+var DEBUG_LOCATION: [number, number] | null = null 
+//DEBUG_LOCATION = [37.76768397896848, -122.43518534355537] // San Francisco
+//DEBUG_LOCATION = [51.5074, -0.1278] // London
+//DEBUG_LOCATION = [37.9838, 23.7275] // Athens
+//DEBUG_LOCATION = [48.198514822371735, -106.62992896455773] // Glagow, MT
 const DEBUG_TIME: string | null = null;
-// Simulated time runs this many times faster than real time, so you can watch the
-// terminator/sunset overlay sweep and the night-lights fade in within seconds. 1 = real
-// time. Try ~60 for smooth motion (a full day in ~24 min) or ~600 for a fast scrub
-// (steppy — see note below). Ignored when DEBUG_TIME is set (that freezes a single instant).
 const DEBUG_TIME_SCALE = 1;
 
 const DEBUG_LAYERS = {
@@ -84,7 +82,6 @@ function main(): void {
     // Signal that the DOM elements and CSS are on the page (independent of the map tile /
     // weather fetches, which complete later and gate the #map-container fade-in).
     document.documentElement.setAttribute("data-loaded", "true");
-    installCloudAlphaBoostFilter();
     locationInit();
     initCloudParallax();
 }
@@ -95,13 +92,11 @@ if (document.readyState === "loading") {
     main();
 }
 
-function installCloudAlphaBoostFilter(): void {
+function installCloudAlphaBoostFilter(alphaTransferTable: string): void {
     const FILTER_ID = "cloud-alpha-boost";
     const FILTER_REGION_INSET = "-25%";
     const FILTER_REGION_SIZE = "150%";
-    const SEAM_BLUR_STD_DEVIATION = "16";
-    const ALPHA_TRANSFER_TABLE =
-        "0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 0.5 0.55 0.575 0.6 0.625 0.65 0.675 0.7 0.7 0.7 0.7 0.7";
+    const SEAM_BLUR_STD_DEVIATION = "10";
 
     if (!document.getElementById(FILTER_ID)) {
         const svgNS = "http://www.w3.org/2000/svg";
@@ -118,17 +113,35 @@ function installCloudAlphaBoostFilter(): void {
         filter.setAttribute("width", FILTER_REGION_SIZE);
         filter.setAttribute("height", FILTER_REGION_SIZE);
 
-        const blur = document.createElementNS(svgNS, "feGaussianBlur");
-        blur.setAttribute("stdDeviation", SEAM_BLUR_STD_DEVIATION);
-        blur.setAttribute("edgeMode", "duplicate");
-        filter.appendChild(blur);
+        // 1. luminance → alpha: cloud brightness becomes opacity, RGB is zeroed to black.
+        const lumToAlpha = document.createElementNS(svgNS, "feColorMatrix");
+        lumToAlpha.setAttribute("type", "luminanceToAlpha");
+        filter.appendChild(lumToAlpha);
 
+        // 2. shape that alpha: kill the dim land/sea floor, ramp clouds up (capped < 1).
         const transfer = document.createElementNS(svgNS, "feComponentTransfer");
         const funcA = document.createElementNS(svgNS, "feFuncA");
         funcA.setAttribute("type", "table");
-        funcA.setAttribute("tableValues", ALPHA_TRANSFER_TABLE);
+        funcA.setAttribute("tableValues", alphaTransferTable);
         transfer.appendChild(funcA);
         filter.appendChild(transfer);
+
+        // 3. soften the coarse satellite pixels / seams.
+        const blur = document.createElementNS(svgNS, "feGaussianBlur");
+        blur.setAttribute("stdDeviation", SEAM_BLUR_STD_DEVIATION);
+        blur.setAttribute("edgeMode", "duplicate");
+        blur.setAttribute("result", "shaped");
+        filter.appendChild(blur);
+
+        // 4. paint the shaped alpha white so clouds read as white, not black.
+        const flood = document.createElementNS(svgNS, "feFlood");
+        flood.setAttribute("flood-color", "white");
+        filter.appendChild(flood);
+
+        const composite = document.createElementNS(svgNS, "feComposite");
+        composite.setAttribute("in2", "shaped");
+        composite.setAttribute("operator", "in");
+        filter.appendChild(composite);
 
         svg.appendChild(filter);
         document.body.appendChild(svg);
@@ -136,7 +149,7 @@ function installCloudAlphaBoostFilter(): void {
 
     const el = document.getElementById("map-clouds");
     if (el) {
-        el.style.filter = `url(#${FILTER_ID})`;
+        el.style.filter = `url(#${FILTER_ID}) opacity(0.8)`;
         el.style.willChange = "filter";
     }
 }
@@ -144,6 +157,9 @@ function installCloudAlphaBoostFilter(): void {
 function initCloudParallax(): void {
     const el = document.getElementById("parallax-clouds");
     if (!el) return;
+    // The cloud-blur layer carries a snapshot of the cloud shape as its mask; drift it by the
+    // same translate so the masked backdrop blur stays registered with the cloud veil.
+    const blurEl = document.getElementById("cloud-blur");
     const MAX_DRIFT_PX = 12;
     const DRIFT_SMOOTHING = 0.08;
     let targetX = 0, targetY = 0;
@@ -159,10 +175,49 @@ function initCloudParallax(): void {
     const tick = () => {
         currentX += (targetX - currentX) * DRIFT_SMOOTHING;
         currentY += (targetY - currentY) * DRIFT_SMOOTHING;
-        el.style.transform = `translate(${currentX.toFixed(2)}px, ${currentY.toFixed(2)}px)`;
+        const transform = `translate(${currentX.toFixed(2)}px, ${currentY.toFixed(2)}px)`;
+        el.style.transform = transform;
+        if (blurEl) blurEl.style.transform = transform;
         requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
+}
+
+// Reads the loaded cloud imagery back off its WebGL canvas, converts cloud luminance into an
+// alpha coverage mask, and installs it on #cloud-blur. The element's backdrop-filter then
+// blurs the satellite + night-lights layers only where clouds are dense, fading to sharp over
+// clear sky. Anywhere the imagery is transparent (off the satellite disk) yields a transparent
+// mask, so the blur simply never appears there. The coverage band is source-dependent: infrared
+// clear sky reads mid-grey rather than black, so it needs a higher floor than the DWD veil.
+function installCloudBlurMask(cloudsMap: maplibregl.Map, coverageLow: number, coverageHigh: number): void {
+    const el = document.getElementById("cloud-blur");
+    if (!el) return;
+
+    const MASK_DOWNSCALE = 4;
+
+    const source = cloudsMap.getCanvas();
+    const width = Math.max(1, Math.round(source.width / MASK_DOWNSCALE));
+    const height = Math.max(1, Math.round(source.height / MASK_DOWNSCALE));
+
+    const scratch = document.createElement("canvas");
+    scratch.width = width;
+    scratch.height = height;
+    const ctx = scratch.getContext("2d")!;
+    ctx.drawImage(source, 0, 0, width, height);
+
+    const img = ctx.getImageData(0, 0, width, height);
+    const data = img.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const luminance = (0.2125 * data[i] + 0.7154 * data[i + 1] + 0.0721 * data[i + 2]) / 255;
+        const coverage = Math.min(1, Math.max(0, (luminance - coverageLow) / (coverageHigh - coverageLow)));
+        data[i] = data[i + 1] = data[i + 2] = 255;
+        data[i + 3] = (smoothstep(coverage) * 255) | 0;
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const maskUrl = `url(${scratch.toDataURL()})`;
+    el.style.maskImage = maskUrl;
+    (el.style as unknown as { webkitMaskImage: string }).webkitMaskImage = maskUrl;
 }
 
 function locationInit(): void {
@@ -269,6 +324,47 @@ function isAnyDarknessVisible(map: maplibregl.Map, date: Date): boolean {
     return false;
 }
 
+interface CloudSource {
+    source: maplibregl.RasterSourceSpecification;
+    alphaTable: string;
+    blurCoverage: [number, number];
+}
+
+// Picks cloud imagery for the viewer's longitude. DWD's Meteosat mosaic (1 km, sharpest, real
+// day-HRV + night-IR) covers Europe / Africa / Atlantic; everywhere else falls back to NASA
+// GIBS Band13 "Clean Infrared" from the nearest geostationary satellite — GOES-West, GOES-East,
+// or Himawari. The IR layers are keyless, near-global, transparent off-disk, and read cold
+// cloud tops as bright over a dark surface, so the same luminance keying as DWD applies (with a
+// higher floor, since IR clear sky is mid-grey rather than black). The weakest seam is ~60–80°E
+// (India / western Indian Ocean), which sits between Meteosat's and Himawari's useful coverage.
+function cloudSourceFor(lng: number): CloudSource {
+    const DWD_ALPHA = "0 0.02 0.08 0.19 0.37 0.55 0.65 0.7 0.74 0.76 0.78 0.79 0.8";
+    const IR_ALPHA = "0 0 0 0 0.03 0.08 0.2 0.4 0.58 0.7 0.76 0.79 0.8";
+
+    if (lng >= -70 && lng < 60) {
+        const url = "https://maps.dwd.de/geoserver/dwd/wms?service=WMS&version=1.3.0&request=GetMap"
+            + "&layers=dwd:Satellite_meteosat_1km_euat_rgb_day_hrv_and_night_ir108_3h"
+            + "&styles=&format=image/png&transparent=true&crs=EPSG:3857"
+            + "&width=256&height=256&bbox={bbox-epsg-3857}";
+        return {
+            source: { type: "raster", tiles: [url], tileSize: 256, maxzoom: 7, attribution: "© Deutscher Wetterdienst / EUMETSAT" },
+            alphaTable: DWD_ALPHA,
+            blurCoverage: [0.15, 0.55],
+        };
+    }
+
+    const layer = (lng >= 60 || lng < -160) ? "Himawari_AHI_Band13_Clean_Infrared"
+        : (lng < -100) ? "GOES-West_ABI_Band13_Clean_Infrared"
+            : "GOES-East_ABI_Band13_Clean_Infrared";
+    const url = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"
+        + `${layer}/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`;
+    return {
+        source: { type: "raster", tiles: [url], tileSize: 256, maxzoom: 6, attribution: "© NASA GIBS / NOAA / JMA" },
+        alphaTable: IR_ALPHA,
+        blurCoverage: [0.45, 0.78],
+    };
+}
+
 function getMap(lat: number, lng: number): void {
     const satelliteMap = new maplibregl.Map({
         container: "map",
@@ -304,6 +400,10 @@ function getMap(lat: number, lng: number): void {
         });
     };
     silenceTileFetchNoise(satelliteMap);
+    // MapLibre captures the container size at construction. If layout hasn't sized #map
+    // yet, the canvas is created too small and CSS stretches it — the imagery looks zoomed
+    // in and pixelated. trackResize is false, so it never self-corrects; resize once on load.
+    satelliteMap.once("load", () => satelliteMap.resize());
 
     const readinessGates: Promise<void>[] = [];
     const gate = (): { promise: Promise<void>; resolve: () => void } => {
@@ -388,17 +488,17 @@ function getMap(lat: number, lng: number): void {
     }
 
     if (DEBUG_LAYERS.clouds) {
+        // The cloud imagery is chosen by longitude (see cloudSourceFor): DWD's sharp Meteosat
+        // mosaic over Europe/Africa/Atlantic, else NASA GIBS infrared from whichever
+        // geostationary satellite actually sees the viewer. Both are keyless and need no runtime
+        // fetch; the #cloud-alpha-boost filter on #map-clouds turns luminance into alpha so only
+        // clouds show.
+        const cloud = cloudSourceFor(lng);
+        installCloudAlphaBoostFilter(cloud.alphaTable);
+
         const cloudStyle = (): maplibregl.StyleSpecification => ({
             version: 8,
-            sources: {
-                "clouds": {
-                    type: "raster",
-                    tiles: [`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_API_KEY}`],
-                    tileSize: 256,
-                    maxzoom: 6,
-                    attribution: "© OpenWeatherMap",
-                },
-            },
+            sources: { "clouds": cloud.source },
             layers: [{
                 id: "clouds-layer",
                 type: "raster",
@@ -418,18 +518,34 @@ function getMap(lat: number, lng: number): void {
                 center: [lng, lat],
                 zoom: MAP_ZOOM,
                 interactive: false,
+                // The cloud-blur mask is read back off this canvas once it settles.
+                canvasContextAttributes: { preserveDrawingBuffer: true },
             });
             silenceTileFetchNoise(cloudsMap);
             readinessGates.push(tilesLoaded(cloudsMap));
             cloudsMap.once("load", () => cloudsMap.resize());
+            cloudsMap.once("idle", () => {
+                try {
+                    installCloudBlurMask(cloudsMap, cloud.blurCoverage[0], cloud.blurCoverage[1]);
+                } catch (e) {
+                    console.error("cloud-blur mask failed", e);
+                }
+            });
         };
 
         createCloudsMap("map-clouds");
     }
 
     Promise.all(readinessGates).then(() => {
-        const container = document.getElementById("map-container");
-        if (container) container.classList.add("show");
+        // Final guard against the size race: if the satellite canvas was ever built at the
+        // wrong size, correct it now while #map-container is still opacity:0, and let the
+        // resized frame paint (rAF) before starting the 1s fade — so the reveal never shows
+        // the zoomed-in, wrong-size render.
+        satelliteMap.resize();
+        requestAnimationFrame(() => {
+            const container = document.getElementById("map-container");
+            if (container) container.classList.add("show");
+        });
     });
 }
 
