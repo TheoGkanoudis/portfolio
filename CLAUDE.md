@@ -21,7 +21,7 @@ Pushing to `main` triggers `.github/workflows/deploy.yml`, which builds and publ
 
 ## Architecture
 
-A single-page visualization (no framework) that renders the viewer's current geographic location as a stack of aligned map layers with real-time lighting. Effectively all logic lives in `src/main.ts`; `index.html` defines the layer DOM and `src/style.css` styles/positions it. The only runtime dependencies are MapLibre GL (map rendering) and SunCalc (sun position).
+A single-page visualization (no framework) that renders the viewer's current geographic location as a stack of aligned map layers with real-time lighting. `src/main.ts` is the lean entry point — bootstrap, geolocation, and the `localStorage` position cache — and hands coordinates to `src/map.ts`, which holds the whole visualization engine (layer stack, lighting model, overlays, clouds, terminator animation). `index.html` defines the layer DOM and `src/style.css` styles/positions it. The only runtime dependencies are MapLibre GL (map rendering) and SunCalc (sun position).
 
 ### Layer stack
 
@@ -36,7 +36,7 @@ A single-page visualization (no framework) that renders the viewer's current geo
 
 ### Location flow
 
-`locationInit()` resolves position from a `localStorage` cache (`cachedPosition`, valid 10 min) or the Geolocation API, then calls `getMap()`. An IIFE at module load (`initLightnessEarly`) reads the cached position synchronously to set the `--lightness` CSS variable before paint, avoiding a flash. `main()` is the entry point, run on `DOMContentLoaded` (or immediately if the DOM is already parsed).
+`locationInit()` (in `main.ts`) resolves position from a `localStorage` cache (`cachedPosition`, valid 10 min) or the Geolocation API, then calls `renderMap()` (in `map.ts`). An IIFE at module load (`initLightnessEarly`) reads the cached position synchronously to set the `--lightness` CSS variable before paint, avoiding a flash. `main()` is the entry point, run on `DOMContentLoaded` (or immediately if the DOM is already parsed).
 
 ### Lighting model
 
@@ -54,7 +54,7 @@ The city-lights imagery comes from `snapshotNightLights()`: the NASA night-light
 
 ### Readiness gating
 
-`getMap()` uses a "gate" pattern: each layer that must paint registers a promise resolved on its MapLibre `idle` event. The night gate is resolved from inside `startTerminatorUpdates()` (via `acquireNightLights`) — immediately if no darkness is visible, otherwise after the night-lights snapshot is taken. `#map-container` starts at `opacity: 0` and only gets the `.show` class — fading in — once `Promise.all` of every gate resolves, so the user never sees layers pop in one at a time.
+`renderMap()` uses a "gate" pattern: each layer that must paint registers a promise resolved on its MapLibre `idle` event. The night gate is resolved from inside `startTerminatorUpdates()` (via `acquireNightLights`) — immediately if no darkness is visible, otherwise after the night-lights snapshot is taken. `#map-container` starts at `opacity: 0` and only gets the `.show` class — fading in — once `Promise.all` of every gate resolves, so the user never sees layers pop in one at a time.
 
 ### Cloud rendering
 
@@ -71,6 +71,6 @@ All sources are opaque-ish imagery (clouds bright, clear sky dark), not ready-ma
 
 ### Conventions / gotchas
 
-- **Debug toggles** at the top of `main.ts`: `DEBUG_LOCATION` (force coordinates), `DEBUG_TIME` (force a Date for lighting), and `DEBUG_LAYERS` (enable/disable each layer). Leave these at their disabled defaults unless debugging.
+- **All tunable values live in the exported `SETTINGS` object at the top of `main.ts`** (zoom, intervals, lighting/overlay thresholds, tile-source URLs, cloud alpha tables, etc.); `map.ts` imports `SETTINGS` and reads from it. This is a deliberate import cycle (`main` ⇄ `map`) — it's safe only because `map.ts` touches `SETTINGS` solely inside functions, never at module top level. Debug toggles live under `SETTINGS.debug`: `location` (force coordinates), `time` (force a Date for lighting), `timeScale`, and `layers` (enable/disable each layer). Leave these at their defaults unless debugging.
 - `initCloudParallax()` drifts the cloud layer with the mouse; it was previously flagged as temporary scaffolding, so confirm it's still wanted before building on it.
 - MapLibre tile-fetch errors are intentionally silenced via `silenceTileFetchNoise()`; only non-AJAX errors reach the console.
